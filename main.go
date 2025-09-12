@@ -42,10 +42,10 @@ func main() {
 	})
 
 	// metrics tracking API
-	mux.HandleFunc("GET /api/metrics", cfg.handleMetrics)
+	mux.HandleFunc("GET /admin/metrics", cfg.handleMetrics)
 
 	// reset fileServerHits in cfg
-	mux.HandleFunc("POST /api/reset", cfg.handleReset)
+	mux.HandleFunc("POST /admin/reset", cfg.handleReset)
 
 	log.Printf("Serving files from %s on port: %s\n", filePathRoot, port)
 	log.Fatal(server.ListenAndServe())
