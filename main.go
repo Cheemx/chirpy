@@ -29,23 +29,23 @@ func main() {
 	}
 
 	// /app route handler to increment hits
-	appHandler := (http.StripPrefix("/app", http.FileServer(http.Dir(filePathRoot))))
+	appHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filePathRoot)))
 	wrapped := cfg.middlewareMetricsInc(appHandler)
 	mux.Handle("/app/", wrapped)
 	mux.Handle("/app", wrapped)
 
 	// API health checker
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte("OK"))
 	})
 
 	// metrics tracking API
-	mux.HandleFunc("GET /metrics", cfg.handleMetrics)
+	mux.HandleFunc("GET /api/metrics", cfg.handleMetrics)
 
 	// reset fileServerHits in cfg
-	mux.HandleFunc("POST /reset", cfg.handleReset)
+	mux.HandleFunc("POST /api/reset", cfg.handleReset)
 
 	log.Printf("Serving files from %s on port: %s\n", filePathRoot, port)
 	log.Fatal(server.ListenAndServe())
