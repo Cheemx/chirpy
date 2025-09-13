@@ -47,6 +47,10 @@ func main() {
 	// reset fileServerHits in cfg
 	mux.HandleFunc("POST /admin/reset", cfg.handleReset)
 
+	// Chirp Validation endpoint
+	mux.HandleFunc("POST /api/validate_chirp", handlerChirpsValidate)
+
+	// Starting the Server
 	log.Printf("Serving files from %s on port: %s\n", filePathRoot, port)
 	log.Fatal(server.ListenAndServe())
 }
