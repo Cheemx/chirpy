@@ -1,9 +1,15 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
+
+	"github.com/Cheemx/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 // atomic.Int32 is a really cool standard-library type
@@ -11,6 +17,8 @@ import (
 // across multiple goroutines (HTTP requests).
 type apiConfig struct {
 	fileServerHits atomic.Int32
+	db             *database.Queries
+	user           *database.User
 }
 
 const (
@@ -19,6 +27,20 @@ const (
 )
 
 func main() {
+	godotenv.Load()
+
+	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		log.Fatal("Can't get DB_URL from .env")
+	}
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	dbQueries := database.New(db)
+
 	mux := &http.ServeMux{}
 	server := &http.Server{
 		Addr:    ":" + port,
@@ -26,6 +48,7 @@ func main() {
 	}
 	cfg := &apiConfig{
 		fileServerHits: atomic.Int32{},
+		db:             dbQueries,
 	}
 
 	// /app route handler to increment hits
@@ -47,8 +70,17 @@ func main() {
 	// reset fileServerHits in cfg
 	mux.HandleFunc("POST /admin/reset", cfg.handleReset)
 
-	// Chirp Validation endpoint
-	mux.HandleFunc("POST /api/validate_chirp", handlerChirpsValidate)
+	// Create Chirp endpoint
+	mux.HandleFunc("POST /api/chirps", cfg.handleCreateChirp)
+
+	// Create User endpoint
+	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
+
+	// Get AllChirps endpoint
+	mux.HandleFunc("GET /api/chirps", cfg.handleGetChirps)
+
+	// Get Chirp by ID
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handleGetChirpByID)
 
 	// Starting the Server
 	log.Printf("Serving files from %s on port: %s\n", filePathRoot, port)

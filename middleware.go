@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 )
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -28,7 +29,16 @@ func (cfg *apiConfig) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handleReset(w http.ResponseWriter, r *http.Request) {
-	cfg.fileServerHits.Store(0)
+	if os.Getenv("PLATFORM") != "dev" {
+		w.WriteHeader(403)
+		return
+	}
+	err := cfg.db.DeleteAllUsers(r.Context())
+	if err != nil {
+		log.Printf("Error Deleting all Users: %v", err)
+		w.WriteHeader(500)
+		return
+	}
 	w.WriteHeader(200)
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 }
