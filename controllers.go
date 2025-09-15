@@ -6,27 +6,40 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/Cheemx/chirpy/internal/auth"
 	"github.com/Cheemx/chirpy/internal/database"
 	"github.com/google/uuid"
 )
 
 func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	// Request Validation
-	type req struct {
-		Email string `json:"email"`
-	}
+	req := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}{}
 
-	var request req
-	err := json.NewDecoder(r.Body).Decode(&request)
+	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		log.Printf("Error decoding request: %v", err)
 		w.WriteHeader(500)
 		return
 	}
 
+	// Hashing the normal text password from r.Body
+	hashedPass, err := auth.HashPassword(req.Password)
+	if err != nil {
+		log.Printf("Error hashing the password: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
 	// Response Validation
-	user, err := cfg.db.CreateUser(r.Context(), request.Email)
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          req.Email,
+		HashedPassword: hashedPass,
+	})
 	if err != nil {
 		log.Printf("Error creating User: %v", err)
 		w.WriteHeader(500)
@@ -36,7 +49,18 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	cfg.user = &user
 
 	// Creating response and responding
-	data, err := json.Marshal(user)
+	res := struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	data, err := json.Marshal(res)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %v", err)
 		w.WriteHeader(500)
@@ -49,11 +73,214 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (cfg *apiConfig) handleLoginUser(w http.ResponseWriter, r *http.Request) {
+	// request parsing
+	req := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		ExpireIn int    `json:"expires_in_seconds,omitempty"`
+	}{}
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Printf("Error decoding request: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Get User by Email
+	user, err := cfg.db.GetUserAndHashPassByEmail(r.Context(), req.Email)
+	if err != nil {
+		log.Printf("Incorrect email or password: %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// validating password
+	err = auth.CheckPasswordHash(req.Password, user.HashedPassword)
+	if err != nil {
+		log.Print(err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// Create the Access Token
+	if req.ExpireIn == 0 || req.ExpireIn > 3600 {
+		req.ExpireIn = 3600
+	}
+
+	token, err := auth.MakeJWT(user.ID, cfg.jwtSecret, time.Duration(req.ExpireIn)*time.Second)
+	if err != nil {
+		log.Printf("Error making JWT %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Create the Refresh Token
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Error making Refresh Token %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	refTok, err := cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:  refreshToken,
+		UserID: user.ID,
+	})
+	if err != nil {
+		log.Printf("Error storing refresh token %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Creating response and responding
+	res := struct {
+		ID           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
+	}{
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: refTok.Token,
+	}
+	data, err := json.Marshal(res)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Responding!
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(data)
+}
+
+func (cfg *apiConfig) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	// get token for header
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Header token error %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Look up token in db
+	refToken, err := cfg.db.GetTokenByTokenValue(r.Context(), token)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Print("Error No Rows with specified token")
+			w.WriteHeader(401)
+			return
+		}
+		log.Printf("Error getting refToken %v", err)
+		w.WriteHeader(500)
+		return
+	}
+	// if expired return 401
+	if time.Now().Compare(refToken.ExpiresAt) > 0 {
+		log.Print("token expired")
+		w.WriteHeader(401)
+		return
+	}
+
+	// check if revoked
+	if refToken.RevokedAt.Valid {
+		log.Print("token revoked")
+		w.WriteHeader(401)
+		return
+	}
+
+	// Get the user of that token
+	user, err := cfg.db.GetUserFromRefreshToken(r.Context(), refToken.Token)
+	if err != nil {
+		log.Printf("Error getting user from token value %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Create new access token for the user
+	accessToken, err := auth.MakeJWT(user.ID, cfg.jwtSecret, 3600*time.Second)
+	if err != nil {
+		log.Printf("Error making JWT %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Creating response
+	res := struct {
+		Token string `json:"token"`
+	}{
+		Token: accessToken,
+	}
+	data, err := json.Marshal(res)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Responding!
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(data)
+}
+
+func (cfg *apiConfig) handleRevokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error making Refresh Token %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// Update the token in database
+	rowsAffected, err := cfg.db.SetTokenTimestamps(r.Context(), database.SetTokenTimestampsParams{
+		RevokedAt: sql.NullTime{Time: time.Now(), Valid: true},
+		UpdatedAt: time.Now(),
+		Token:     token,
+	})
+	if err != nil {
+		log.Printf("Error setting Refresh Token timestamps %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if rowsAffected < 1 {
+		log.Printf("Error setting Refresh Token timestamps %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	w.WriteHeader(204)
+}
+
 func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, r *http.Request) {
+	// Authorization checkpoint
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Auth Header error: %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	userId, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("JWT validation error: %v", err)
+		w.WriteHeader(401)
+		return
+	}
 	// Request validation
 	decoder := json.NewDecoder(r.Body)
 	request := database.CreateChirpParams{}
-	err := decoder.Decode(&request)
+	err = decoder.Decode(&request)
 	if err != nil {
 		log.Printf("Error decoding request parameters: %s", err)
 		w.WriteHeader(500)
@@ -97,7 +324,7 @@ func (cfg *apiConfig) handleCreateChirp(w http.ResponseWriter, r *http.Request) 
 
 	// Creating the Chirp in database
 	request.Body = chirp
-	request.UserID = cfg.user.ID
+	request.UserID = userId
 	Chirp, err := cfg.db.CreateChirp(r.Context(), request)
 	if err != nil {
 		log.Printf("Error Creating Chirp: %v", err)

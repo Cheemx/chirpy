@@ -19,6 +19,7 @@ type apiConfig struct {
 	fileServerHits atomic.Int32
 	db             *database.Queries
 	user           *database.User
+	jwtSecret      string
 }
 
 const (
@@ -49,6 +50,7 @@ func main() {
 	cfg := &apiConfig{
 		fileServerHits: atomic.Int32{},
 		db:             dbQueries,
+		jwtSecret:      os.Getenv("SECRET"),
 	}
 
 	// /app route handler to increment hits
@@ -75,6 +77,15 @@ func main() {
 
 	// Create User endpoint
 	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
+
+	// Login User endpoint
+	mux.HandleFunc("POST /api/login", cfg.handleLoginUser)
+
+	// Check Token Expiry endpoint
+	mux.HandleFunc("POST /api/refresh", cfg.handleRefreshToken)
+
+	// Revoke the Refresh Token
+	mux.HandleFunc("POST /api/revoke", cfg.handleRevokeRefreshToken)
 
 	// Get AllChirps endpoint
 	mux.HandleFunc("GET /api/chirps", cfg.handleGetChirps)
