@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,15 +51,17 @@ func (cfg *apiConfig) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Creating response and responding
 	res := struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 	data, err := json.Marshal(res)
 	if err != nil {
@@ -142,6 +145,7 @@ func (cfg *apiConfig) handleLoginUser(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}{
 		ID:           user.ID,
 		CreatedAt:    user.CreatedAt,
@@ -149,6 +153,7 @@ func (cfg *apiConfig) handleLoginUser(w http.ResponseWriter, r *http.Request) {
 		Email:        user.Email,
 		Token:        token,
 		RefreshToken: refTok.Token,
+		IsChirpyRed:  user.IsChirpyRed,
 	}
 	data, err := json.Marshal(res)
 	if err != nil {
@@ -354,6 +359,52 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// get order of chirps param
+	order := r.URL.Query().Get("sort")
+
+	// get author_id from request params if provided
+	id := r.URL.Query().Get("author_id")
+	if id != "" {
+		// get chirps of that id only
+		var c []database.Chirp
+		uid, err := uuid.Parse(id)
+		if err != nil {
+			log.Printf("Error parsing the key: %v", err)
+			w.WriteHeader(500)
+			return
+		}
+		for _, chirp := range chirps {
+			if chirp.UserID == uid {
+				c = append(c, chirp)
+			}
+		}
+		if order == "desc" {
+			sort.Slice(c, func(i, j int) bool {
+				return c[j].CreatedAt.Compare(c[i].CreatedAt) < 0
+			})
+		}
+		// Creating response Body
+		data, err := json.Marshal(c)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %v", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		// Responding!
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write(data)
+		return
+	}
+
+	// descending chirps
+	if order == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[j].CreatedAt.Compare(chirps[i].CreatedAt) < 0
+		})
+	}
+
 	// Creating response Body
 	data, err := json.Marshal(chirps)
 	if err != nil {
@@ -457,15 +508,17 @@ func (cfg *apiConfig) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Creating response and responding
 	res := struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}{
-		ID:        updateduser.ID,
-		CreatedAt: updateduser.CreatedAt,
-		UpdatedAt: updateduser.UpdatedAt,
-		Email:     updateduser.Email,
+		ID:          updateduser.ID,
+		CreatedAt:   updateduser.CreatedAt,
+		UpdatedAt:   updateduser.UpdatedAt,
+		Email:       updateduser.Email,
+		IsChirpyRed: updateduser.IsChirpyRed,
 	}
 	data, err := json.Marshal(res)
 	if err != nil {
@@ -537,4 +590,76 @@ func (cfg *apiConfig) handleDeleteChirp(w http.ResponseWriter, r *http.Request) 
 
 	// chirp deleted successfully
 	w.WriteHeader(204)
+}
+
+func (cfg *apiConfig) handleUpdateUserToRed(w http.ResponseWriter, r *http.Request) {
+	// Validate the request for pola key header
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		log.Printf("Error getting the apiKey, %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// check if both keys are same or not
+	if apiKey != cfg.polkaKey {
+		log.Print("Wrong API KEY ")
+		w.WriteHeader(401)
+		return
+	}
+
+	// request struct to parse
+	req := struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}{}
+
+	// Unmarshall the request
+	err = json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Print("Error Unmarshalling request body")
+		w.WriteHeader(500)
+		return
+	}
+
+	// check if event is correct
+	if req.Event != "user.upgraded" {
+		log.Print("Unknown Event encountered")
+		w.WriteHeader(204)
+		return
+	}
+
+	// check if id is provided
+	if req.Data.UserID == "" {
+		log.Print("Bad Request")
+		w.WriteHeader(401)
+		return
+	}
+
+	// get userID from req
+	id, err := uuid.Parse(req.Data.UserID)
+	if err != nil {
+		log.Print("Error decoding user ID")
+		w.WriteHeader(500)
+		return
+	}
+
+	// update user to red
+	_, err = cfg.db.UpdateUserToRedByID(r.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("Error finding the user: %v", err)
+			w.WriteHeader(404)
+			return
+		}
+		log.Printf("Error Updating the User to Red: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// return with 204 code
+	w.WriteHeader(204)
+
 }

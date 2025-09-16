@@ -20,6 +20,7 @@ type apiConfig struct {
 	db             *database.Queries
 	user           *database.User
 	jwtSecret      string
+	polkaKey       string
 }
 
 const (
@@ -51,6 +52,7 @@ func main() {
 		fileServerHits: atomic.Int32{},
 		db:             dbQueries,
 		jwtSecret:      os.Getenv("SECRET"),
+		polkaKey:       os.Getenv("POLKA_KEY"),
 	}
 
 	// /app route handler to increment hits
@@ -89,6 +91,9 @@ func main() {
 
 	// Revoke the Refresh Token
 	mux.HandleFunc("POST /api/revoke", cfg.handleRevokeRefreshToken)
+
+	// Update User to Red Endpoint
+	mux.HandleFunc("POST /api/polka/webhooks", cfg.handleUpdateUserToRed)
 
 	// Get AllChirps endpoint
 	mux.HandleFunc("GET /api/chirps", cfg.handleGetChirps)
