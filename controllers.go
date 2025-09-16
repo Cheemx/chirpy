@@ -396,3 +396,145 @@ func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(200)
 	w.Write(data)
 }
+
+func (cfg *apiConfig) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	// get the authorization header
+	accessToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting auth Header %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// get the user from the token
+	userID, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Error getting user from token value %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// /request body to parse the http request
+	req := struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}{}
+
+	// Decode the request
+	err = json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		log.Print("Error unmarshalling the request")
+		w.WriteHeader(500)
+		return
+	}
+
+	// validate email and password for emptiness
+	if req.Email == "" || req.Password == "" {
+		log.Print("Empty request parameters")
+		w.WriteHeader(401)
+		return
+	}
+
+	// hash the text password
+	hashedPass, err := auth.HashPassword(req.Password)
+	if err != nil {
+		log.Print("Error unmarshalling the request")
+		w.WriteHeader(500)
+		return
+	}
+
+	// update the user with new information
+	updateduser, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email:          req.Email,
+		HashedPassword: hashedPass,
+		ID:             userID,
+	})
+	if err != nil {
+		log.Printf("Error updating the user %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Creating response and responding
+	res := struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}{
+		ID:        updateduser.ID,
+		CreatedAt: updateduser.CreatedAt,
+		UpdatedAt: updateduser.UpdatedAt,
+		Email:     updateduser.Email,
+	}
+	data, err := json.Marshal(res)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Responding!
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(data)
+}
+
+func (cfg *apiConfig) handleDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	// get the authorization header
+	accessToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting auth Header %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// get the user from the token
+	userID, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if err != nil {
+		log.Printf("Error getting user from token value %v", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// Get the chitpID from request parameters
+	ChirpID := r.PathValue("chirpID")
+
+	// parse the chirpID to uuid format
+	id, err := uuid.Parse(ChirpID)
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+
+	// Get Chirp from Database by ID
+	chirp, err := cfg.db.GetChirpByID(r.Context(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Print("Chirp not found")
+			w.WriteHeader(404)
+			return
+		}
+		log.Printf("Error getting the Chirp: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Check if Authenticated user and Chirp's author are same or not
+	if chirp.UserID != userID {
+		log.Print("Chirp Author and current user are not same")
+		w.WriteHeader(403)
+		return
+	}
+
+	// Delete the chirp since user and chirpID are confirmed
+	err = cfg.db.DeleteChirpByID(r.Context(), uuid.MustParse(ChirpID))
+	if err != nil {
+		log.Printf("Error deleting the Chirp: %v", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// chirp deleted successfully
+	w.WriteHeader(204)
+}

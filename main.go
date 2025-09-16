@@ -78,6 +78,9 @@ func main() {
 	// Create User endpoint
 	mux.HandleFunc("POST /api/users", cfg.handleCreateUser)
 
+	// Update User endpoint
+	mux.HandleFunc("PUT /api/users", cfg.handleUpdateUser)
+
 	// Login User endpoint
 	mux.HandleFunc("POST /api/login", cfg.handleLoginUser)
 
@@ -92,6 +95,9 @@ func main() {
 
 	// Get Chirp by ID
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handleGetChirpByID)
+
+	// Delete Chirp by ID
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", cfg.handleDeleteChirp)
 
 	// Starting the Server
 	log.Printf("Serving files from %s on port: %s\n", filePathRoot, port)
