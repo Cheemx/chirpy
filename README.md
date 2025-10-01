@@ -191,4 +191,7 @@ The application expects the following database tables:
 - `chirps` - Chirp messages
 - `refresh_tokens` - Refresh token storage
 
-Thanks and Star the repository if you found it fascinating ⭐
+### Conclusion
+*If you've read it till this end, consider giving a star!*
+
+*Built with ❤️ using Go, designed for scale and performance by Cheems!*
